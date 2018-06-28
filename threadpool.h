@@ -50,27 +50,27 @@ public:
     {
         num_threads = std::max< unsigned int >( 1, num_threads );
 
-        worker_threads.reserve( num_threads );
+        m_worker_threads.reserve( num_threads );
 
         for ( unsigned int threadid = 0; threadid < num_threads; ++threadid )
         {
-            auto thread = std::thread( &ThreadPool::worker_thread_func, this, threadid );
+            std::thread thread( &ThreadPool::worker_thread_func, this, threadid );
 
 #ifdef HAVE_PTHREAD_SETNAME_NP
             std::string thread_name = "thpool" + std::to_string( threadid );
             pthread_setname_np( thread.native_handle(), thread_name.c_str() );
 #endif
 
-            worker_threads.push_back( std::move( thread ) );
+            m_worker_threads.push_back( std::move( thread ) );
         }
     }
 
     ~ThreadPool()
     {
-        shutdown = true;
-        conditional_lock.notify_all();
+        m_shutdown = true;
+        m_conditional_lock.notify_all();
 
-        for ( std::thread &worker : worker_threads )
+        for ( std::thread &worker : m_worker_threads )
         {
             if ( worker.joinable() )
                 worker.join();
@@ -84,14 +84,14 @@ public:
             Job job;
 
             {
-                std::unique_lock< std::mutex > lock( job_queue_mutex );
+                std::unique_lock< std::mutex > lock( m_job_queue_mutex );
 
-                conditional_lock.wait( lock, [this] { return shutdown || !job_queue.empty(); } );
-                if ( shutdown )
+                m_conditional_lock.wait( lock, [this] { return m_shutdown || !m_job_queue.empty(); } );
+                if ( m_shutdown )
                     break;
 
-                job = std::move( job_queue.front() );
-                job_queue.pop();
+                job = std::move( m_job_queue.front() );
+                m_job_queue.pop();
             }
 
             //$ TODO mikesart: printf( "Threadid %u executing job '%s'...\n", threadid, job.name.c_str() );
@@ -112,20 +112,20 @@ public:
 
         {
             Job job;
-            std::unique_lock< std::mutex > lock( job_queue_mutex );
+            std::unique_lock< std::mutex > lock( m_job_queue_mutex );
 
             job.name = job_name;
             job.func = [task]() { ( *task )(); };
-            job_queue.push( std::move( job ) );
+            m_job_queue.push( std::move( job ) );
         }
 
-        conditional_lock.notify_one();
+        m_conditional_lock.notify_one();
         return result;
     }
 
     size_t get_num_threads()
     {
-        return worker_threads.size();
+        return m_worker_threads.size();
     }
 
     static unsigned int get_num_supported_hw_threads()
@@ -148,15 +148,15 @@ private:
         std::string name;
         std::function< void() > func;
     };
-    std::queue< Job > job_queue;
-    std::mutex job_queue_mutex;
+    std::queue< Job > m_job_queue;
+    std::mutex m_job_queue_mutex;
 
-    std::condition_variable conditional_lock;
+    std::condition_variable m_conditional_lock;
 
-    std::vector< std::thread > worker_threads;
+    std::vector< std::thread > m_worker_threads;
 
     // Threadpool shutting down?
-    std::atomic_bool shutdown;
+    std::atomic_bool m_shutdown;
 };
 
 #endif /* THREADPOOL_H */
